@@ -1,0 +1,33 @@
+{
+	"subsystems": [
+		{
+			"subsystem": "bdev",
+			"config": [
+				{
+					"method": "bdev_aio_create",
+					"params": {
+						"name": "aio_bdev_pe01",
+						"block_size": 4096,
+						"filename": "/mnt/pe01"
+					}
+				},
+				{
+					"method": "bdev_aio_create",
+					"params": {
+						"name": "aio_bdev_pe02",
+						"block_size": 4096,
+						"filename": "/mnt/pe02"
+					}
+				},
+				{
+					"method": "bdev_raid_create",
+					"params": {
+						"name": "bdev_raid",
+						"raid_level": "1",
+						"base_bdevs": ["aio_bdev_pe01", "aio_bdev_pe02"]
+					}
+				}
+			]
+		}
+	]
+}
