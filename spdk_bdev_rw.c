@@ -64,6 +64,8 @@ hello_bdev_parse_arg(int ch, char *arg)
 static void
 read_complete(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
 {
+
+    SPDK_NOTICELOG("In read Complete");
 	struct hello_context_t *hello_context = cb_arg;
 
 	if (success) {
@@ -87,10 +89,11 @@ hello_read(void *arg)
 	int rc = 0;
 
 	SPDK_NOTICELOG("Reading io\n");
+    SPDK_NOTICELOG("Buff Size: %d \n", hello_context->buff_size);
 	rc = spdk_bdev_read(hello_context->bdev_desc, hello_context->bdev_io_channel,
 			    hello_context->buff, 0, hello_context->buff_size, read_complete,
 			    hello_context);
-
+    SPDK_NOTICELOG("After Call to read %d", rc);
 	if (rc == -ENOMEM) {
 		SPDK_NOTICELOG("Queueing io\n");
 		/* In case we cannot perform I/O now, queue I/O */
@@ -215,21 +218,41 @@ hello_reset_zone(void *arg)
 
 static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev == MG_EV_HTTP_MSG) {
+        struct hello_context_t *hello_context = (struct hello_context_t *) c->fn_data;
         struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+        
         MG_INFO(("New request to: [%.*s], body size: %lu", (int) hm->uri.len,
                 hm->uri.ptr, (unsigned long) hm->body.len));
         if (mg_http_match_uri(hm, "/upload")) {
-        struct mg_http_part part;
-        size_t ofs = 0;
-        while ((ofs = mg_http_next_multipart(hm->body, ofs, &part)) > 0) {
-            MG_INFO(("Chunk name: [%.*s] filename: [%.*s] length: %lu bytes",
-                    (int) part.name.len, part.name.ptr, (int) part.filename.len,
-                    part.filename.ptr, (unsigned long) part.body.len));
+            struct mg_http_part part;
+            size_t ofs = 0;
+            while ((ofs = mg_http_next_multipart(hm->body, ofs, &part)) > 0) {
+                MG_INFO(("Chunk name: [%.*s] filename: [%.*s] length: %lu bytes",
+                        (int) part.name.len, part.name.ptr, (int) part.filename.len,
+                        part.filename.ptr, (unsigned long) part.body.len));
+                int chunk_size = hello_context->buff_size;
+                int curr = 0;
+                while(curr < part.body.len) {
+                    char piece[chunk_size];
+                    if(chunk_size + curr < part.body.len) {
+                        strncpy(piece, part.body.ptr+curr, chunk_size);
+                        snprintf(hello_context->buff, hello_context->buff_size, "%s", &piece[0]);
+                    }
+                    curr += chunk_size;
+                }
+            }
+            if(hello_context->buff != NULL) {
+                hello_write(hello_context);
+            }
+            mg_http_reply(c, 200, "", "Thank you!");
+        } 
+        else if(mg_http_match_uri(hm, "/read")) {
+            memset(hello_context->buff, 0, hello_context->buff_size);
+            hello_read(hello_context);
         }
-        mg_http_reply(c, 200, "", "Thank you!");
-        } else {
-        struct mg_http_serve_opts opts = {.root_dir = "web_root"};
-        mg_http_serve_dir(c, ev_data, &opts);
+        else {
+            struct mg_http_serve_opts opts = {.root_dir = "web_root"};
+            mg_http_serve_dir(c, ev_data, &opts);
         }
     }
 }
@@ -285,6 +308,7 @@ hello_start(void *arg1)
 	hello_context->buff_size = spdk_bdev_get_block_size(hello_context->bdev) *
 				   spdk_bdev_get_write_unit_size(hello_context->bdev);
     SPDK_NOTICELOG("Size ==== %" PRIu32 "\n", hello_context->buff_size);
+    SPDK_NOTICELOG("Name ==== %s \n", hello_context->bdev_name);
 	buf_align = spdk_bdev_get_buf_align(hello_context->bdev);
 	hello_context->buff = spdk_dma_zmalloc(hello_context->buff_size, buf_align, NULL);
 	if (!hello_context->buff) {
@@ -300,7 +324,7 @@ hello_start(void *arg1)
     struct mg_mgr mgr;
     mg_mgr_init(&mgr);
     mg_log_set(MG_LL_DEBUG);
-    mg_http_listen(&mgr, "http://0.0.0.0:8000", ev_handler, NULL);
+    mg_http_listen(&mgr, "http://0.0.0.0:8000", ev_handler, hello_context);
 
     for (;;) {
         mg_mgr_poll(&mgr, 50);
